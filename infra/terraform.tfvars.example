@@ -1,0 +1,14 @@
+aws_region = "us-east-1"
+
+project_name = "oficina"
+
+db_identifier = "oficina-db"
+db_name       = "oficina"
+db_username   = "oficina_user"
+db_password   = "Oficina12345!"
+
+db_instance_class    = "db.t3.micro"
+db_allocated_storage = 20
+
+# Deixe vazio para usar a VPC default da conta (padrão em AWS Academy/Learner Lab).
+vpc_id = ""
