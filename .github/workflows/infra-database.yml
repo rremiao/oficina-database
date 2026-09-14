@@ -1,0 +1,44 @@
+name: Validate Database Infrastructure
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate Terraform
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Check Terraform formatting
+        run: terraform -chdir=infra fmt -check
+
+      - name: Initialize Terraform without backend
+        run: terraform -chdir=infra init -backend=false
+
+      - name: Validate Terraform configuration
+        run: terraform -chdir=infra validate
+
+      - name: Print infrastructure instructions
+        run: |
+          echo "A configuração Terraform está válida."
+          echo
+          echo "O apply e o destroy não são executados pelo GitHub Actions."
+          echo "O Terraform usa state local (Learner Lab não mantém credenciais entre execuções)."
+          echo
+          echo "Provisionamento:"
+          echo "  terraform -chdir=infra plan -out=tfplan"
+          echo "  terraform -chdir=infra apply tfplan"
