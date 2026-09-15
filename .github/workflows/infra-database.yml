@@ -1,4 +1,4 @@
-name: Validate Database Infrastructure
+name: Database Infrastructure
 
 on:
   pull_request:
@@ -9,6 +9,15 @@ on:
 
 permissions:
   contents: read
+
+# Um apply de cada vez: dois em paralelo no mesmo state se atrapalham.
+concurrency:
+  group: oficina-database-deploy
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: us-east-1
+  TERRAFORM_VERSION: "1.9.8"
 
 jobs:
   validate:
@@ -22,6 +31,8 @@ jobs:
 
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
 
       - name: Check Terraform formatting
         run: terraform -chdir=infra fmt -check
@@ -32,13 +43,70 @@ jobs:
       - name: Validate Terraform configuration
         run: terraform -chdir=infra validate
 
-      - name: Print infrastructure instructions
+  # Só roda em push na main (nunca em PR) — é quem de fato provisiona o RDS. Depende das credenciais
+  # temporárias do AWS Academy estarem atualizadas nos secrets do repositório (ver README).
+  deploy:
+    name: Apply Terraform
+    needs: validate
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Validate AWS identity
         run: |
-          echo "A configuração Terraform está válida."
-          echo
-          echo "O apply e o destroy não são executados pelo GitHub Actions."
-          echo "O Terraform usa state local (Learner Lab não mantém credenciais entre execuções)."
-          echo
-          echo "Provisionamento:"
-          echo "  terraform -chdir=infra plan -out=tfplan"
-          echo "  terraform -chdir=infra apply tfplan"
+          set -euo pipefail
+
+          if ! aws sts get-caller-identity; then
+            echo "::error::Credenciais AWS invalidas ou expiradas."
+            echo "::error::O Learner Lab renova as credenciais a cada sessao. Atualize os secrets AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY e AWS_SESSION_TOKEN."
+            exit 1
+          fi
+
+      - name: Check state bucket configured
+        run: |
+          set -euo pipefail
+
+          if [ -z "${{ vars.TF_STATE_BUCKET }}" ]; then
+            echo "::error::Variavel TF_STATE_BUCKET nao configurada no repositorio."
+            echo "::error::Crie o bucket (ver README, secao Bootstrap) e configure a variavel antes do deploy."
+            exit 1
+          fi
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Apply Terraform
+        working-directory: infra
+        env:
+          TF_VAR_db_password: ${{ secrets.DB_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          terraform init -input=false \
+            -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}" \
+            -backend-config="key=oficina-database/terraform.tfstate" \
+            -backend-config="region=${AWS_REGION}"
+
+          terraform apply -auto-approve -input=false
+
+      - name: Export outputs
+        working-directory: infra
+        run: |
+          set -euo pipefail
+
+          echo "RDS endpoint: $(terraform output -raw rds_endpoint)" >> "$GITHUB_STEP_SUMMARY"

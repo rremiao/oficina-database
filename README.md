@@ -65,12 +65,34 @@ por sandbox do Learner Lab.
 
 ## Execução e deploy
 
+### Bootstrap do bucket de state (uma vez só, por conta AWS)
+
+O backend `s3` é parcial de propósito (`backend "s3" {}` em `versions.tf`) — o bucket não é
+provisionado pelo próprio Terraform deste repositório. Criar manualmente antes do primeiro `init`:
+
+```bash
+BUCKET="oficina-database-tfstate-$(aws sts get-caller-identity --query Account --output text)"
+aws s3api create-bucket --bucket "$BUCKET" --region us-east-1
+aws s3api put-bucket-versioning --bucket "$BUCKET" --versioning-configuration Status=Enabled
+aws s3api put-public-access-block --bucket "$BUCKET" \
+  --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
+```
+
+No AWS Academy Learner Lab, a conta é reciclada periodicamente — se o bucket sumir, este passo
+precisa ser refeito antes de qualquer `terraform init`.
+
+### Aplicando manualmente
+
 ```bash
 cd infra
 cp terraform.tfvars.example terraform.tfvars
 # edite terraform.tfvars com a senha do banco e demais parâmetros
 
-terraform init
+terraform init \
+  -backend-config="bucket=<bucket-do-bootstrap-acima>" \
+  -backend-config="key=oficina-database/terraform.tfstate" \
+  -backend-config="region=us-east-1"
+
 terraform plan -out=tfplan
 terraform apply tfplan
 ```
@@ -99,11 +121,28 @@ RDS). Ordem completa entre os 4 repositórios, com o porquê de cada passo, no
 
 ## Pipeline (CI/CD)
 
-O workflow [`infra-database.yml`](.github/workflows/infra-database.yml) roda em push/PR para `main`
-e valida o Terraform (`fmt -check`, `init -backend=false`, `validate`). O `apply`/`destroy` **não**
-são executados pela pipeline — o Learner Lab não garante credenciais persistentes entre execuções do
-GitHub Actions, então o provisionamento é manual, a partir da máquina de quem está com a sessão AWS
-Academy ativa.
+O workflow [`infra-database.yml`](.github/workflows/infra-database.yml) tem dois jobs:
+
+- **`validate`** (push e PR para `main`): `fmt -check`, `init -backend=false`, `validate`. Não toca
+  em recursos AWS, roda sempre.
+- **`deploy`** (só push na `main`, ou disparo manual): aplica o Terraform de verdade
+  (`terraform apply -auto-approve`), usando o state remoto no bucket S3 do bootstrap acima.
+
+O `deploy` depende de credenciais AWS válidas configuradas como **Secrets** do repositório
+(Settings → Secrets and variables → Actions):
+
+| Nome | Tipo | Conteúdo |
+|---|---|---|
+| `AWS_ACCESS_KEY_ID` | Secret | Credencial temporária da sessão AWS Academy |
+| `AWS_SECRET_ACCESS_KEY` | Secret | Credencial temporária da sessão AWS Academy |
+| `AWS_SESSION_TOKEN` | Secret | Credencial temporária da sessão AWS Academy |
+| `DB_PASSWORD` | Secret | Senha do usuário master do RDS |
+| `TF_STATE_BUCKET` | Variable | Nome do bucket criado no bootstrap acima |
+
+**Importante**: como o Learner Lab usa credenciais de sessão (expiram em poucas horas, mudam a cada
+"Start Lab"), os 3 secrets de AWS precisam ser **atualizados manualmente antes de cada push que deva
+disparar um deploy real** — a pipeline falha com uma mensagem clara (`Credenciais AWS invalidas ou
+expiradas`) se estiverem vencidas, em vez de tentar aplicar com credencial inválida.
 
 ## Modelo de dados
 
@@ -114,6 +153,9 @@ O diagrama entidade-relacionamento completo, com as observações sobre o schema
 ## Decisões arquiteturais
 
 - [ADR-0001 — Segregação do state de banco em repositório próprio](docs/adr/0001-segregacao-do-state-de-banco.md)
+- [ADR-0002 — Isolamento de rede do RDS](docs/adr/0002-isolamento-de-rede-do-rds.md)
+- [ADR-0003 — Dimensionamento e ausência de backup](docs/adr/0003-dimensionamento-e-ausencia-de-backup.md)
+- [ADR-0004 — Deploy automático via pipeline, com state remoto](docs/adr/0004-deploy-automatico-via-pipeline.md)
 
 ## Swagger / Postman
 
