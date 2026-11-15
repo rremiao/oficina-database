@@ -110,3 +110,24 @@ jobs:
           set -euo pipefail
 
           echo "RDS endpoint: $(terraform output -raw rds_endpoint)" >> "$GITHUB_STEP_SUMMARY"
+
+      # Fase 4: OS Service e Billing usam Flyway e precisam de bancos separados dentro do mesmo RDS
+      # (ADR-0005). O RDS é privado, então o psql roda num pod descartável no cluster EKS. Sem o
+      # cluster no ar, só avisa: suba o cluster e rode este workflow de novo (Run workflow).
+      - name: Criar bancos dos microsserviços
+        working-directory: infra
+        env:
+          PGPASSWORD: ${{ secrets.DB_PASSWORD }}
+          EKS_CLUSTER_NAME: ${{ vars.EKS_CLUSTER_NAME || 'oficina-eks' }}
+          DB_USERNAME: ${{ vars.DB_USERNAME || 'oficina_user' }}
+        run: |
+          set -euo pipefail
+
+          if ! aws eks describe-cluster --name "${EKS_CLUSTER_NAME}" >/dev/null 2>&1; then
+            echo "::warning::Cluster ${EKS_CLUSTER_NAME} não encontrado: bancos os_service e billing não criados. Suba o cluster e rode este workflow de novo."
+            exit 0
+          fi
+
+          aws eks update-kubeconfig --name "${EKS_CLUSTER_NAME}" --region "${AWS_REGION}"
+          RDS_ENDPOINT="$(terraform output -raw rds_endpoint)" bash ../scripts/criar-bancos-microsservicos.sh
+          echo "Bancos dos microsserviços: os_service, billing" >> "$GITHUB_STEP_SUMMARY"

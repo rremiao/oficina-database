@@ -37,6 +37,8 @@ Spring Data JPA.
 |   |-- providers.tf
 |   |-- versions.tf
 |   `-- terraform.tfvars.example
+|-- scripts/
+|   `-- criar-bancos-microsservicos.sh  # bancos os_service e billing (Fase 4)
 |-- docs/
 |   |-- der.md                      # diagrama entidade-relacionamento do schema
 |   |-- rfc/0001-escolha-do-banco-de-dados.md
@@ -104,6 +106,26 @@ Após o `apply`, os outputs relevantes para os outros repositórios são:
 - `rds_security_group_id` — caso outro componente precise ser liberado explicitamente no security
   group do banco.
 
+### Bancos dos microsserviços (Fase 4)
+
+OS Service e Billing usam bancos próprios dentro deste RDS: `os_service` e `billing`
+([ADR-0005](docs/adr/0005-bancos-dos-microsservicos-no-mesmo-rds.md)). O pipeline cria os dois
+depois do `apply`, se o cluster EKS já estiver no ar; senão, só avisa. Para criar à mão (Git Bash,
+com o `kubectl` apontando para o cluster):
+
+```bash
+aws eks update-kubeconfig --name oficina-eks --region us-east-1
+RDS_ENDPOINT="$(terraform -chdir=infra output -raw rds_endpoint)" PGPASSWORD='<senha>' \
+  bash scripts/criar-bancos-microsservicos.sh
+```
+
+URLs para os secrets de cada serviço:
+
+| Serviço | Secret | Valor |
+|---|---|---|
+| OS Service | `OS_DATASOURCE_URL` | `jdbc:postgresql://<rds_endpoint>:5432/os_service` |
+| Billing | `BILLING_DATASOURCE_URL` | `jdbc:postgresql://<rds_endpoint>:5432/billing` |
+
 ```bash
 terraform output
 ```
@@ -126,7 +148,8 @@ O workflow [`infra-database.yml`](.github/workflows/infra-database.yml) tem dois
 - **`validate`** (push e PR para `main`): `fmt -check`, `init -backend=false`, `validate`. Não toca
   em recursos AWS, roda sempre.
 - **`deploy`** (só push na `main`, ou disparo manual): aplica o Terraform de verdade
-  (`terraform apply -auto-approve`), usando o state remoto no bucket S3 do bootstrap acima.
+  (`terraform apply -auto-approve`), usando o state remoto no bucket S3 do bootstrap acima, e depois
+  cria os bancos `os_service` e `billing` se o cluster EKS já existir.
 
 O `deploy` depende de credenciais AWS válidas configuradas como **Secrets** do repositório
 (Settings → Secrets and variables → Actions):
@@ -138,6 +161,7 @@ O `deploy` depende de credenciais AWS válidas configuradas como **Secrets** do 
 | `AWS_SESSION_TOKEN` | Secret | Credencial temporária da sessão AWS Academy |
 | `DB_PASSWORD` | Secret | Senha do usuário master do RDS |
 | `TF_STATE_BUCKET` | Variable | Nome do bucket criado no bootstrap acima |
+| `EKS_CLUSTER_NAME` | Variable (opcional) | Cluster usado para criar os bancos. Padrão `oficina-eks` |
 
 **Importante**: como o Learner Lab usa credenciais de sessão (expiram em poucas horas, mudam a cada
 "Start Lab"), os 3 secrets de AWS precisam ser **atualizados manualmente antes de cada push que deva
@@ -156,6 +180,7 @@ O diagrama entidade-relacionamento completo, com as observações sobre o schema
 - [ADR-0002 — Isolamento de rede do RDS](docs/adr/0002-isolamento-de-rede-do-rds.md)
 - [ADR-0003 — Dimensionamento e ausência de backup](docs/adr/0003-dimensionamento-e-ausencia-de-backup.md)
 - [ADR-0004 — Deploy automático via pipeline, com state remoto](docs/adr/0004-deploy-automatico-via-pipeline.md)
+- [ADR-0005 — Bancos dos microsserviços no mesmo RDS](docs/adr/0005-bancos-dos-microsservicos-no-mesmo-rds.md)
 
 ## Swagger / Postman
 
