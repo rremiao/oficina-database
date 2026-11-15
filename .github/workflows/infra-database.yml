@@ -123,8 +123,10 @@ jobs:
         run: |
           set -euo pipefail
 
-          if ! aws eks describe-cluster --name "${EKS_CLUSTER_NAME}" >/dev/null 2>&1; then
-            echo "::warning::Cluster ${EKS_CLUSTER_NAME} não encontrado: bancos os_service e billing não criados. Suba o cluster e rode este workflow de novo."
+          # Cluster ainda em CREATING também conta como ausente: o update-kubeconfig só funciona com ACTIVE
+          STATUS=$(aws eks describe-cluster --name "${EKS_CLUSTER_NAME}" --query 'cluster.status' --output text 2>/dev/null || echo "AUSENTE")
+          if [ "${STATUS}" != "ACTIVE" ]; then
+            echo "::warning::Cluster ${EKS_CLUSTER_NAME} está ${STATUS}: bancos os_service e billing não criados. Espere o cluster ficar ACTIVE e rode este workflow de novo."
             exit 0
           fi
 
